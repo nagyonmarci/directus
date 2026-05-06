@@ -2,46 +2,44 @@ import type { SchemaOverview } from '@directus/types';
 import knex from 'knex';
 import { MockClient } from 'knex-mock-client';
 import { beforeAll, describe, expect, test, vi } from 'vitest';
-import { FnHelperPostgres } from './postgres.js';
+import { FnHelperOracle } from './oracle.js';
 
 vi.mock('../../../run-ast/lib/apply-query/filter/index.js', () => ({
 	applyFilter: vi.fn((_knex, _schema, query) => ({ query })),
 }));
 
-function makeSchema(dbType: 'json' | 'jsonb'): SchemaOverview {
-	return {
-		collections: {
-			items: {
-				collection: 'items',
-				primary: 'id',
-				singleton: false,
-				sortField: null,
-				note: null,
-				accountability: null,
-				fields: {
-					data: {
-						field: 'data',
-						type: 'json',
-						dbType,
-						nullable: true,
-						generated: false,
-						defaultValue: null,
-						alias: false,
-						validation: null,
-						special: [],
-						note: null,
-						precision: null,
-						scale: null,
-						searchable: false,
-					},
+const schema: SchemaOverview = {
+	collections: {
+		items: {
+			collection: 'items',
+			primary: 'id',
+			singleton: false,
+			sortField: null,
+			note: null,
+			accountability: null,
+			fields: {
+				data: {
+					field: 'data',
+					type: 'json',
+					dbType: 'varchar2',
+					nullable: true,
+					generated: false,
+					defaultValue: null,
+					alias: false,
+					validation: null,
+					special: [],
+					note: null,
+					precision: null,
+					scale: null,
+					searchable: false,
 				},
 			},
 		},
-		relations: [],
-	};
-}
+	},
+	relations: [],
+};
 
-describe('FnHelperPostgres', () => {
+describe('FnHelperOracle', () => {
 	let db: ReturnType<typeof knex>;
 
 	beforeAll(() => {
@@ -49,37 +47,8 @@ describe('FnHelperPostgres', () => {
 	});
 
 	describe('json()', () => {
-		test('uses ::json cast for json dbType', () => {
-			const helper = new FnHelperPostgres(db, makeSchema('json'));
-
-			const result = helper.json('items', 'data', {
-				type: 'json',
-				jsonPath: '.color',
-				originalCollectionName: undefined,
-				relationalCountOptions: undefined,
-			});
-
-			const { sql } = result.toSQL();
-			expect(sql).toContain('::json');
-			expect(sql).not.toContain('::jsonb');
-		});
-
-		test('uses ::jsonb cast for jsonb dbType', () => {
-			const helper = new FnHelperPostgres(db, makeSchema('jsonb'));
-
-			const result = helper.json('items', 'data', {
-				type: 'json',
-				jsonPath: '.color',
-				originalCollectionName: undefined,
-				relationalCountOptions: undefined,
-			});
-
-			const { sql } = result.toSQL();
-			expect(sql).toContain('::jsonb');
-		});
-
-		test('jsonReturnType numeric wraps expression with ::numeric', () => {
-			const helper = new FnHelperPostgres(db, makeSchema('jsonb'));
+		test('jsonReturnType numeric uses RETURNING NUMBER clause', () => {
+			const helper = new FnHelperOracle(db, schema);
 
 			const result = helper.json('items', 'data', {
 				type: 'json',
@@ -90,12 +59,26 @@ describe('FnHelperPostgres', () => {
 			});
 
 			const { sql } = result.toSQL();
-			expect(sql).toContain('::numeric');
-			expect(sql).toContain('::jsonb');
+			expect(sql).toContain("'$.price' RETURNING NUMBER");
+		});
+
+		test('default (no jsonReturnType) uses COALESCE(JSON_QUERY, JSON_VALUE)', () => {
+			const helper = new FnHelperOracle(db, schema);
+
+			const result = helper.json('items', 'data', {
+				type: 'json',
+				jsonPath: '.name',
+				originalCollectionName: undefined,
+				relationalCountOptions: undefined,
+			});
+
+			const { sql } = result.toSQL();
+			expect(sql).toMatch(/COALESCE\(JSON_QUERY/i);
+			expect(sql).toMatch(/JSON_VALUE/i);
 		});
 
 		test('uses originalCollectionName for schema lookup when provided', () => {
-			const helper = new FnHelperPostgres(db, makeSchema('jsonb'));
+			const helper = new FnHelperOracle(db, schema);
 
 			// 'aliased' is not in the schema, but 'items' is — without originalCollectionName this would throw
 			const result = helper.json('aliased', 'data', {
@@ -106,11 +89,11 @@ describe('FnHelperPostgres', () => {
 			});
 
 			const { sql } = result.toSQL();
-			expect(sql).toContain('::jsonb');
+			expect(sql).toContain("'$.color'");
 		});
 
 		test('throws when the field is not a JSON field', () => {
-			const helper = new FnHelperPostgres(db, makeSchema('jsonb'));
+			const helper = new FnHelperOracle(db, schema);
 
 			expect(() =>
 				helper.json('items', 'nonexistent', {
@@ -123,7 +106,7 @@ describe('FnHelperPostgres', () => {
 		});
 
 		test('throws when jsonPath is absent', () => {
-			const helper = new FnHelperPostgres(db, makeSchema('jsonb'));
+			const helper = new FnHelperOracle(db, schema);
 
 			expect(() =>
 				helper.json('items', 'data', {
