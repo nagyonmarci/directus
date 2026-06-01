@@ -1,0 +1,2 @@
+This file tests the dependency-review workflow.
+No new dependencies are introduced in this PR.
