@@ -1,2 +1,3 @@
 This file tests the dependency-review workflow.
 No new dependencies are introduced in this PR.
+Retriggered after Dependency Graph was enabled.
