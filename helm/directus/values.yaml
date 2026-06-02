@@ -1,0 +1,98 @@
+replicaCount: 1
+
+image:
+  repository: directus/directus
+  pullPolicy: IfNotPresent
+  # Overrides the image tag; defaults to Chart.AppVersion
+  tag: ''
+
+imagePullSecrets: []
+nameOverride: ''
+fullnameOverride: ''
+
+serviceAccount:
+  create: true
+  annotations: {}
+  name: ''
+
+podAnnotations: {}
+
+podSecurityContext:
+  fsGroup: 1000
+
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+
+service:
+  type: ClusterIP
+  port: 8055
+
+ingress:
+  enabled: false
+  className: ''
+  annotations: {}
+  hosts:
+    - host: directus.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+resources:
+  requests:
+    memory: '256Mi'
+    cpu: '100m'
+  limits:
+    memory: '1Gi'
+    cpu: '1000m'
+
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 5
+  targetCPUUtilizationPercentage: 80
+  # targetMemoryUtilizationPercentage: 80
+
+persistence:
+  uploads:
+    enabled: true
+    storageClass: ''
+    accessMode: ReadWriteOnce
+    size: 1Gi
+  # Enable only for SQLite; disable when using an external DB (Postgres, MySQL, etc.)
+  database:
+    enabled: true
+    storageClass: ''
+    accessMode: ReadWriteOnce
+    size: 512Mi
+
+# Directus environment variables (non-sensitive)
+# Full reference: https://docs.directus.io/self-hosted/config-options.html
+env:
+  PUBLIC_URL: 'http://localhost:8055'
+  DB_CLIENT: 'sqlite3'
+  DB_FILENAME: '/directus/database/database.sqlite'
+  # LOG_LEVEL: "info"
+  # CACHE_ENABLED: "false"
+  # RATE_LIMITER_ENABLED: "false"
+
+# Sensitive values — stored in a Kubernetes Secret.
+# Leave empty to have the chart generate random values.
+secrets:
+  KEY: ''
+  SECRET: ''
+  ADMIN_EMAIL: 'admin@example.com'
+  ADMIN_PASSWORD: ''
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# Grace period allowing PM2 to finish in-flight requests before SIGKILL
+# See upstream issue: https://github.com/directus/directus/issues/20348
+terminationGracePeriodSeconds: 60
