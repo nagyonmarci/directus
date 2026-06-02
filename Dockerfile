@@ -49,13 +49,18 @@ EOF
 
 FROM node:${NODE_VERSION}-alpine AS runtime
 
+# Pin exact versions to avoid unexpected updates via floating tags
 RUN npm install --global \
-	pm2@5 \
-	corepack@latest # Remove again once corepack >= 0.31 made it into base image
+	pm2@7.0.1 \
+	corepack@0.35.0
 
 USER node
 
 WORKDIR /directus
+
+LABEL org.opencontainers.image.source="https://github.com/directus/directus" \
+      org.opencontainers.image.description="Directus – flexible backend for all your projects" \
+      org.opencontainers.image.licenses="BUSL-1.1"
 
 ENV \
 	DB_CLIENT="sqlite3" \
@@ -67,6 +72,10 @@ COPY --from=builder --chown=node:node /directus/ecosystem.config.cjs .
 COPY --from=builder --chown=node:node /directus/dist .
 
 EXPOSE 8055
+
+# Kubernetes and Docker health checks use this endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+	CMD wget -qO- http://localhost:8055/server/health || exit 1
 
 CMD : \
 	&& node cli.js bootstrap \

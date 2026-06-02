@@ -5,11 +5,7 @@ on:
     tags:
       - 'v[0-9]*'
 
-permissions:
-  contents: write
-  packages: write
-  attestations: write
-  id-token: write
+permissions: read-all
 
 env:
   GHCR_IMAGE: ghcr.io/${{ github.repository }}
@@ -20,22 +16,26 @@ jobs:
   check-npm-packages:
     name: Check NPM Packages
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Check if packages exist on NPM
-        uses: directus/npm-package-existence-checker@v1
+        uses: directus/npm-package-existence-checker@9bb0c1e36d2f33912ee958ac8ced0a33ce896255 # v1
 
   check-version:
     name: Check Version
     runs-on: ubuntu-latest
     needs: check-npm-packages
+    permissions:
+      contents: read
     outputs:
       prerelease: ${{ steps.version.outputs.prerelease && true || false }}
     steps:
       - name: Check version
-        uses: madhead/semver-utils@v4
+        uses: madhead/semver-utils@36d1e0ed361bd7b4b77665de8093092eaeabe6ba # v4
         id: version
         with:
           version: ${{ github.ref_name }}
@@ -46,23 +46,13 @@ jobs:
     runs-on: ubuntu-latest
     needs: check-version
     permissions:
-      actions: write
-      attestations: write
-      checks: write
-      contents: write
-      deployments: write
-      discussions: write
+      contents: read
       id-token: write
-      issues: write
-      models: read
       packages: write
-      pages: write
-      pull-requests: write
-      security-events: write
-      statuses: write
+      attestations: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Prepare
         uses: ./.github/actions/prepare
@@ -91,20 +81,10 @@ jobs:
             runner: ubuntu-24.04-arm
     runs-on: ${{ matrix.runner }}
     permissions:
-      actions: write
-      attestations: write
-      checks: write
-      contents: write
-      deployments: write
-      discussions: write
+      contents: read
       id-token: write
-      issues: write
-      models: read
       packages: write
-      pages: write
-      pull-requests: write
-      security-events: write
-      statuses: write
+      attestations: write
     steps:
       - name: Prepare
         run: |
@@ -112,13 +92,13 @@ jobs:
           echo "PLATFORM_SLUG=${platform//\//-}" >> $GITHUB_ENV
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Cache Docker layers
-        uses: actions/cache@v5
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
         with:
           path: /tmp/.buildx-cache
           key: ${{ runner.os }}-${{ env.PLATFORM_SLUG }}-buildx-${{ github.sha }}
@@ -127,7 +107,7 @@ jobs:
 
       - name: Extract metadata for Docker image
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: |
             ${{ env.DOCKERHUB_IMAGE }}
@@ -140,7 +120,7 @@ jobs:
             type=raw,value=canary,enable=${{ needs.check-version.outputs.prerelease }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         if: env.DOCKERHUB_IMAGE != ''
         with:
           registry: docker.io
@@ -148,7 +128,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         if: env.GHCR_IMAGE != ''
         with:
           registry: ghcr.io
@@ -156,7 +136,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push by digest
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         id: build
         with:
           context: .
@@ -164,6 +144,7 @@ jobs:
           platforms: ${{ matrix.platform }}
           labels: ${{ steps.meta.outputs.labels }}
           provenance: true
+          sbom: true
           cache-from: type=local,src=/tmp/.buildx-cache
           cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
           # prettier-ignore
@@ -176,7 +157,7 @@ jobs:
           touch "${{ runner.temp }}/digests/${digest#sha256:}"
 
       - name: Upload digest
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: digests-${{ env.PLATFORM_SLUG }}
           path: ${{ runner.temp }}/digests/*
@@ -198,38 +179,28 @@ jobs:
       - check-version
       - build-images
     permissions:
-      actions: write
-      attestations: write
-      checks: write
-      contents: write
-      deployments: write
-      discussions: write
+      contents: read
       id-token: write
-      issues: write
-      models: read
       packages: write
-      pages: write
-      pull-requests: write
-      security-events: write
-      statuses: write
+      attestations: write
     steps:
       - name: Download digests
-        uses: actions/download-artifact@v6
+        uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6
         with:
           path: ${{ runner.temp }}/digests
           pattern: digests-*
           merge-multiple: true
 
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
         if: env.DOCKERHUB_IMAGE != ''
 
       - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Extract metadata for Docker image
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5
         with:
           images: |
             ${{ env.DOCKERHUB_IMAGE }}
@@ -242,7 +213,7 @@ jobs:
             type=raw,value=canary,enable=${{ needs.check-version.outputs.prerelease }}
 
       - name: Login to Docker Hub
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         if: env.DOCKERHUB_IMAGE != ''
         with:
           registry: docker.io
@@ -250,7 +221,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Login to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         if: env.GHCR_IMAGE != ''
         with:
           registry: ghcr.io
@@ -275,7 +246,7 @@ jobs:
             $(printf '${{ env.GHCR_IMAGE }}@sha256:%s ' *)
 
       - name: Get Docker Hub manifest digest
-        id: get-digest
+        id: get-dockerhub-digest
         if: env.DOCKERHUB_IMAGE != ''
         run: |
           set -euo pipefail
@@ -289,7 +260,24 @@ jobs:
       - name: Sign Docker Hub image with GitHub OIDC Token
         if: env.DOCKERHUB_IMAGE != ''
         run: |
-          cosign sign --yes --recursive ${{ env.DOCKERHUB_IMAGE }}@${{ steps.get-digest.outputs.digest }}
+          cosign sign --yes --recursive ${{ env.DOCKERHUB_IMAGE }}@${{ steps.get-dockerhub-digest.outputs.digest }}
+
+      - name: Get GHCR manifest digest
+        id: get-ghcr-digest
+        if: env.GHCR_IMAGE != ''
+        run: |
+          set -euo pipefail
+          DIGEST=$(docker buildx imagetools inspect ${{ env.GHCR_IMAGE }}:${{ steps.meta.outputs.version }} --format '{{json .Manifest.Digest}}' | tr -d '"')
+          if [ -z "$DIGEST" ]; then
+            echo "::error::Failed to get manifest digest for ${{ env.GHCR_IMAGE }}:${{ steps.meta.outputs.version }}"
+            exit 1
+          fi
+          echo "digest=$DIGEST" >> $GITHUB_OUTPUT
+
+      - name: Sign GHCR image with GitHub OIDC Token
+        if: env.GHCR_IMAGE != ''
+        run: |
+          cosign sign --yes --recursive ${{ env.GHCR_IMAGE }}@${{ steps.get-ghcr-digest.outputs.digest }}
 
       - name: Inspect Docker Hub image
         if: env.DOCKERHUB_IMAGE != ''
@@ -308,9 +296,11 @@ jobs:
       - check-version
       - publish-npm
       - publish-docker-images
+    permissions:
+      contents: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
 
       - name: Create release
         env:
