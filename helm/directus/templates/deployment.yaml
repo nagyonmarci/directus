@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "directus.fullname" . }}
+  labels:
+    {{- include "directus.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "directus.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "directus.selectorLabels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "directus.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      # Run bootstrap (DB migrations) in an init container so the main container
+      # only starts after migrations succeed — prevents race conditions on k8s
+      # rollouts. Addresses: https://github.com/directus/directus/issues/15522
+      initContainers:
+        - name: bootstrap
+          image: {{ include "directus.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["node", "cli.js", "bootstrap"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          envFrom:
+            - configMapRef:
+                name: {{ include "directus.fullname" . }}
+            - secretRef:
+                name: {{ include "directus.fullname" . }}
+          volumeMounts:
+            {{- if .Values.persistence.uploads.enabled }}
+            - name: uploads
+              mountPath: /directus/uploads
+            {{- end }}
+            {{- if .Values.persistence.database.enabled }}
+            - name: database
+              mountPath: /directus/database
+            {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: {{ include "directus.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Bootstrap already ran in the init container; start pm2 directly
+          command: ["pm2-runtime", "start", "ecosystem.config.cjs"]
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 8055
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "directus.fullname" . }}
+            - secretRef:
+                name: {{ include "directus.fullname" . }}
+          livenessProbe:
+            httpGet:
+              path: /server/health
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /server/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          volumeMounts:
+            {{- if .Values.persistence.uploads.enabled }}
+            - name: uploads
+              mountPath: /directus/uploads
+            {{- end }}
+            {{- if .Values.persistence.database.enabled }}
+            - name: database
+              mountPath: /directus/database
+            {{- end }}
+      # Allow PM2 to finish in-flight requests before SIGKILL
+      # https://github.com/directus/directus/issues/20348
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      volumes:
+        {{- if .Values.persistence.uploads.enabled }}
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: {{ include "directus.fullname" . }}-uploads
+        {{- end }}
+        {{- if .Values.persistence.database.enabled }}
+        - name: database
+          persistentVolumeClaim:
+            claimName: {{ include "directus.fullname" . }}-database
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

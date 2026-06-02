@@ -1,0 +1,16 @@
+apiVersion: v2
+name: directus
+description: Directus – flexible backend for all your projects
+type: application
+version: 0.1.0
+appVersion: '11.0.0'
+keywords:
+  - directus
+  - cms
+  - headless
+  - api
+home: https://directus.io
+sources:
+  - https://github.com/directus/directus
+maintainers:
+  - name: nagyonmarci
