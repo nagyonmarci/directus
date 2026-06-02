@@ -1,0 +1,35 @@
+{{- if .Values.persistence.uploads.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "directus.fullname" . }}-uploads
+  labels:
+    {{- include "directus.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.uploads.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.uploads.size }}
+  {{- if .Values.persistence.uploads.storageClass }}
+  storageClassName: {{ .Values.persistence.uploads.storageClass }}
+  {{- end }}
+{{- end }}
+---
+{{- if .Values.persistence.database.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "directus.fullname" . }}-database
+  labels:
+    {{- include "directus.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.database.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.database.size }}
+  {{- if .Values.persistence.database.storageClass }}
+  storageClassName: {{ .Values.persistence.database.storageClass }}
+  {{- end }}
+{{- end }}
