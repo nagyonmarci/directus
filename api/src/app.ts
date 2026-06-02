@@ -6,6 +6,7 @@ import { useEnv } from '@directus/env';
 import { InvalidPayloadError, ServiceUnavailableError } from '@directus/errors';
 import { handlePressure } from '@directus/pressure';
 import { toBoolean } from '@directus/utils';
+import { getNodeEnv } from '@directus/utils/node';
 import cookieParser from 'cookie-parser';
 import type { Request, RequestHandler, Response } from 'express';
 import express from 'express';
@@ -115,9 +116,14 @@ export default async function createApp(): Promise<express.Application> {
 	}
 
 	if (typeof env['SECRET'] === 'string' && Buffer.byteLength(env['SECRET']) < 32) {
-		logger.warn(
-			'"SECRET" env variable is shorter than 32 bytes which is insecure. This is not appropriate for production usage.',
-		);
+		if (getNodeEnv() === 'production') {
+			logger.error('"SECRET" env variable is shorter than 32 bytes. Refusing to start in production.');
+			process.exit(1);
+		} else {
+			logger.warn(
+				'"SECRET" env variable is shorter than 32 bytes which is insecure. This is not appropriate for production usage.',
+			);
+		}
 	}
 
 	if (!new Url(env['PUBLIC_URL'] as string).isAbsolute()) {
@@ -232,11 +238,6 @@ export default async function createApp(): Promise<express.Application> {
 	await emitter.emitInit('middlewares.before', { app });
 
 	app.use(createExpressLogger());
-
-	app.use((_req, res, next) => {
-		res.setHeader('X-Powered-By', 'Directus');
-		next();
-	});
 
 	if (env['CORS_ENABLED'] === true) {
 		app.use(cors);
