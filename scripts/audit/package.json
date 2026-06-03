@@ -1,0 +1,16 @@
+{
+	"name": "directus-security-audit",
+	"version": "1.0.0",
+	"description": "Automated DevSecOps audit report generator",
+	"type": "module",
+	"scripts": {
+		"collect": "node collect.mjs",
+		"generate": "node generate.mjs"
+	},
+	"dependencies": {
+		"@anthropic-ai/sdk": "^0.55.0"
+	},
+	"engines": {
+		"node": ">=20"
+	}
+}

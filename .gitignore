@@ -41,6 +41,10 @@ debug
 # Temporary files
 TODO
 
+# Security audit generated files
+audit-context.json
+scripts/audit/node_modules/
+
 # Directus
 *.db
 /schema.yaml
