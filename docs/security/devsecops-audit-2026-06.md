@@ -115,7 +115,7 @@ already in place and confirmed **effective**:
 
 | ID                                                           | Severity    | Title                                                 | OWASP 2021                             | Status   |
 | ------------------------------------------------------------ | ----------- | ----------------------------------------------------- | -------------------------------------- | -------- |
-| [P0-1](#p0-1-helm-secrets-regenerated-on-every-helm-upgrade) | 🔴 Critical | Helm secrets regenerated on every `helm upgrade`      | A02 Cryptographic Failures             | ✅ Fixed |
+| [P0-1](#p0-1-helm-secrets-regenerated-on-every-helm-upgrade) | 🔴 Critical | Helm secrets regenerated on every `helm upgrade`      | A05 Security Misconfiguration          | ✅ Fixed |
 | [P1-1](#p1-1-x-powered-by-header-explicitly-re-exposed)      | 🟠 High     | `X-Powered-By: Directus` header explicitly re-added   | A05 Security Misconfiguration          | ✅ Fixed |
 | [P1-2](#p1-2-unpinned-ci-action-refs-in-checkyml)            | 🟠 High     | Unpinned CI action tags in `check.yml`                | A08 Software & Data Integrity Failures | ✅ Fixed |
 | [P1-3](#p1-3-codeql-does-not-gate-pull-requests)             | 🟠 High     | CodeQL does not gate pull requests                    | A08 Software & Data Integrity Failures | ✅ Fixed |
@@ -127,9 +127,16 @@ already in place and confirmed **effective**:
 
 ### P0-1: Helm secrets regenerated on every `helm upgrade`
 
-**OWASP:** A02 — Cryptographic Failures  
-**CWE:** CWE-330 — Use of Insufficiently Random Values  
-**CVSS v3.1 Base Score:** 8.1 (High) — local attacker can trigger credential rotation via routine upgrade
+**OWASP:** A05 — Security Misconfiguration  
+**CWE:** CWE-665 — Improper Initialization (secret re-initialised on every render)  
+**Severity:** High — primary impact is **availability**, not confidentiality
+
+> **Note on scoring:** This is not an adversary-driven vulnerability. The generated values are cryptographically sound
+> (`randAlphaNum`); the defect is that they are non-idempotent — regenerated on every render instead of persisted. The
+> realistic impact is a self-inflicted denial of service (mass session invalidation, admin lockout) triggered by a
+> routine `helm upgrade`. CVSS assumes an attacker and models this poorly, so severity here is rated qualitatively on
+> availability and operational integrity. (CWE-330 was considered and rejected: the randomness is adequate; the
+> lifecycle is the bug.)
 
 #### Description
 
@@ -185,6 +192,29 @@ Priority order for each secret:
 1. Explicit value in `values.yaml` (operator-controlled)
 2. Value already stored in the live Kubernetes Secret (upgrade-stable)
 3. Fresh random value (first install only)
+
+#### GitOps caveat (important)
+
+`lookup` queries the live cluster, so it only works when Helm has API access at apply time:
+
+- **Flux `HelmRelease`** — works. The helm-controller performs real server-side installs/upgrades via the Helm SDK, so
+  `lookup` reads the existing Secret.
+- **`helm template`, client-side `--dry-run`, `helm diff`, ArgoCD (default helm-template render)** — `lookup` returns an
+  empty map. In these contexts the chart falls through to the `randAlphaNum` branch and regenerates the secret,
+  reintroducing exactly this finding. Validate the chart in CI accordingly, and do not rely on this pattern if migrating
+  to ArgoCD.
+
+#### Preferred long-term approach
+
+Generating secrets inside the chart is a known GitOps anti-pattern. The robust fix is to remove secret generation from
+the chart entirely and source it externally:
+
+- **SOPS + age** — encrypted values committed to git, decrypted by Flux
+- **Sealed Secrets** — encrypted `SealedSecret` CRs, safe to commit
+- **External Secrets Operator** — pulls from Vault / a cloud secret manager
+
+The `lookup` fix is acceptable as an interim, upgrade-stable measure; track externalisation as a follow-up (see
+**P2-7**).
 
 #### Verification
 
@@ -259,10 +289,12 @@ Mutable tags can be silently repointed to a different commit by anyone with writ
 including a compromised maintainer account or a supply-chain attacker. This is precisely how the
 **tj-actions/changed-files compromise** occurred:
 
-> In March 2025, attackers rewrote all version tags (`v1`–`v47`) in `tj-actions/changed-files` to point to a malicious
-> commit. The payload exfiltrated CI secrets (including `GITHUB_TOKEN`, NPM tokens, Docker credentials) from every
-> workflow that ran during the window. Approximately 23,000 repositories were affected. Workflows that pinned to a
-> commit SHA were **completely unaffected**.
+> In March 2025 (CVE-2025-30066), an attacker rewrote the version tags of `tj-actions/changed-files` from `v1` through
+> `v45.0.7` to point to a malicious commit. The payload dumped the GitHub runner's memory — including `GITHUB_TOKEN`,
+> npm tokens and other credentials — into the **workflow logs**, where anyone with read access could harvest them (a
+> critical exposure for public repositories). The action is used by **over 23,000 repositories**; actual secret exposure
+> was limited to those that ran the action during the 2025-03-14/15 window. The compromise was patched in `v46.0.1`.
+> Workflows pinned to a commit SHA were **completely unaffected**.
 
 All security-sensitive workflows in this repository (`release.yml`, `trivy.yml`, `codeql-analysis.yml`, `scorecard.yml`,
 `dependency-review.yml`) already used SHA-pinned refs. `check.yml` was the sole remaining gap.
@@ -276,6 +308,11 @@ commit SHAs:
 uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd        # v6
 uses: tj-actions/changed-files@9426d40962ed5378910ee2e21d5f8c6fcbf2dd96 # v47.0.6
 ```
+
+> **Verify the pin:** confirm each SHA actually resolves to the claimed tag
+> (`git ls-remote --tags https://github.com/tj-actions/changed-files`), since a mislabelled SHA defeats the purpose.
+> Also reconsider whether the dependency is needed at all — for simple change detection, native `git diff` removes this
+> supply-chain surface entirely.
 
 #### Verification
 
@@ -445,23 +482,37 @@ fallback is appropriate for development only.
 **Recommendation:** Change the default to an empty string and add a Helm validation (`required`) to force operators to
 supply their own admin email, preventing accidental deployment with a predictable admin identity.
 
+### P2-7: Externalise Helm secret generation
+
+**Current state:** The P0-1 fix uses `lookup` to make secret generation upgrade-stable, but this is a known GitOps
+anti-pattern: `lookup` silently returns an empty map in `helm template`, `--dry-run`, `helm diff`, and ArgoCD's default
+render mode, causing secrets to regenerate in those contexts and reintroducing the original problem.  
+**Recommendation:** Remove secret generation from the chart entirely. Source secrets from one of:
+
+- **SOPS + age** — encrypted values committed to git, decrypted by Flux at apply time
+- **Sealed Secrets** — `SealedSecret` CRs encrypted with the cluster's public key, safe to commit
+- **External Secrets Operator** — pulls live values from Vault, AWS Secrets Manager, GCP Secret Manager, etc.
+
+This eliminates the non-idempotent generation problem at its root and works correctly with all GitOps tooling.
+
 ---
 
 ## 8. Remediation Status
 
-| ID   | Finding                                  | Commit    | Status     |
-| ---- | ---------------------------------------- | --------- | ---------- |
-| P0-1 | Helm secrets regenerated on upgrade      | `214720f` | ✅ Fixed   |
-| P1-1 | X-Powered-By header re-exposed           | `214720f` | ✅ Fixed   |
-| P1-2 | Unpinned CI action refs                  | `214720f` | ✅ Fixed   |
-| P1-3 | CodeQL not gating PRs                    | `214720f` | ✅ Fixed   |
-| P1-4 | Weak SECRET advisory-only                | `214720f` | ✅ Fixed   |
-| P2-1 | Trivy scans upstream image               | —         | ⏳ Backlog |
-| P2-2 | HSTS disabled by default                 | —         | ⏳ Backlog |
-| P2-3 | Broad CSP connectSrc                     | —         | ⏳ Backlog |
-| P2-4 | Older checkout SHA in dependency-review  | —         | ⏳ Backlog |
-| P2-5 | Missing SECRET should fail in production | —         | ⏳ Backlog |
-| P2-6 | Admin email default is example.com       | —         | ⏳ Backlog |
+| ID   | Finding                                         | Commit    | Status     |
+| ---- | ----------------------------------------------- | --------- | ---------- |
+| P0-1 | Helm secrets regenerated on upgrade             | `214720f` | ✅ Fixed   |
+| P1-1 | X-Powered-By header re-exposed                  | `214720f` | ✅ Fixed   |
+| P1-2 | Unpinned CI action refs                         | `214720f` | ✅ Fixed   |
+| P1-3 | CodeQL not gating PRs                           | `214720f` | ✅ Fixed   |
+| P1-4 | Weak SECRET advisory-only                       | `214720f` | ✅ Fixed   |
+| P2-1 | Trivy scans upstream image                      | —         | ⏳ Backlog |
+| P2-2 | HSTS disabled by default                        | —         | ⏳ Backlog |
+| P2-3 | Broad CSP connectSrc                            | —         | ⏳ Backlog |
+| P2-4 | Older checkout SHA in dependency-review         | —         | ⏳ Backlog |
+| P2-5 | Missing SECRET should fail in production        | —         | ⏳ Backlog |
+| P2-6 | Admin email default is example.com              | —         | ⏳ Backlog |
+| P2-7 | Externalise Helm secret generation (SOPS / ESO) | —         | ⏳ Backlog |
 
 ---
 
