@@ -113,17 +113,21 @@ already in place and confirmed **effective**:
 
 ## 4. Findings Summary
 
-| ID                                                           | Severity    | Title                                                 | OWASP 2021                             | Status   |
-| ------------------------------------------------------------ | ----------- | ----------------------------------------------------- | -------------------------------------- | -------- |
-| [P0-1](#p0-1-helm-secrets-regenerated-on-every-helm-upgrade) | 🔴 Critical | Helm secrets regenerated on every `helm upgrade`      | A05 Security Misconfiguration          | ✅ Fixed |
-| [P1-1](#p1-1-x-powered-by-header-explicitly-re-exposed)      | 🟠 High     | `X-Powered-By: Directus` header explicitly re-added   | A05 Security Misconfiguration          | ✅ Fixed |
-| [P1-2](#p1-2-unpinned-ci-action-refs-in-checkyml)            | 🟠 High     | Unpinned CI action tags in `check.yml`                | A08 Software & Data Integrity Failures | ✅ Fixed |
-| [P1-3](#p1-3-codeql-does-not-gate-pull-requests)             | 🟠 High     | CodeQL does not gate pull requests                    | A08 Software & Data Integrity Failures | ✅ Fixed |
-| [P1-4](#p1-4-weak-secret-is-advisory-only-in-production)     | 🟠 High     | Weak `SECRET` advisory-only — no production hard-fail | A02 Cryptographic Failures             | ✅ Fixed |
+> **Severity note:** P0/P1/P2 labels denote **fix urgency** (operational priority), not CVSS severity bands. A P0
+> finding must be remediated before the next deployment regardless of CVSS score; a P1 finding targets the next sprint.
+> CVSS severity (Critical / High / Medium / Low) is called out separately per finding.
+
+| ID                                                           | Priority | Severity | Title                                                 | OWASP 2021                             | Status   |
+| ------------------------------------------------------------ | -------- | -------- | ----------------------------------------------------- | -------------------------------------- | -------- |
+| [P0-1](#p0-1-helm-secrets-regenerated-on-every-helm-upgrade) | P0       | 🟠 High  | Helm secrets regenerated on every `helm upgrade`      | A05 Security Misconfiguration          | ✅ Fixed |
+| [P1-1](#p1-1-x-powered-by-header-re-exposed)                 | P1       | 🔵 Low   | `X-Powered-By: Directus` header re-exposed            | A05 Security Misconfiguration          | ✅ Fixed |
+| [P1-2](#p1-2-unpinned-ci-action-refs-in-checkyml)            | P1       | 🟠 High  | Unpinned CI action tags in `check.yml`                | A08 Software & Data Integrity Failures | ✅ Fixed |
+| [P1-3](#p1-3-codeql-does-not-gate-pull-requests)             | P1       | 🟠 High  | CodeQL does not gate pull requests                    | A08 Software & Data Integrity Failures | ✅ Fixed |
+| [P1-4](#p1-4-weak-secret-is-advisory-only-in-production)     | P1       | 🟠 High  | Weak `SECRET` advisory-only — no production hard-fail | A02 Cryptographic Failures             | ✅ Fixed |
 
 ---
 
-## 5. P0 Findings — Critical
+## 5. P0 Findings — Highest Priority
 
 ### P0-1: Helm secrets regenerated on every `helm upgrade`
 
@@ -231,17 +235,18 @@ SECRET_AFTER=$(kubectl get secret directus -o jsonpath='{.data.SECRET}')
 
 ---
 
-## 6. P1 Findings — High
+## 6. P1 Findings — High / Low
 
-### P1-1: `X-Powered-By: Directus` header explicitly re-exposed
+### P1-1: `X-Powered-By: Directus` header re-exposed
 
 **OWASP:** A05 — Security Misconfiguration  
-**CWE:** CWE-200 — Exposure of Sensitive Information
+**CWE:** CWE-200 — Exposure of Sensitive Information  
+**Severity:** Low (Informational) — disclosure only; no exploitability without a separate vulnerability
 
 #### Description
 
 `api/src/app.ts` called `app.disable('x-powered-by')` on line 152 to suppress Express's default technology disclosure
-header — then immediately re-added it in a middleware block five lines later:
+header — then immediately re-added it in a middleware block:
 
 ```typescript
 // line 152 — disables Express default
@@ -254,13 +259,18 @@ app.use((_req, res, next) => {
 });
 ```
 
-Every HTTP response therefore contained `X-Powered-By: Directus`, advertising the exact framework version family to
-potential attackers and making targeted exploitation (known CVEs against Directus) trivial to set up.
+> **Context:** The disable→re-add pattern strongly suggests this was a deliberate upstream Directus product decision
+> (brand visibility), not an oversight. Evaluated as a **hardening recommendation against an upstream default** rather
+> than a novel finding. A reviewer unfamiliar with the upstream intent could discount other findings if this is
+> over-rated; Low / Informational is the appropriate severity.
+
+Every HTTP response contained `X-Powered-By: Directus`, advertising the framework to potential attackers. This lowers
+the bar for reconnaissance but does not constitute an exploitable vulnerability on its own.
 
 #### Fix
 
-The five-line middleware block (lines 236–239) was deleted. The `app.disable('x-powered-by')` call already present on
-line 152 is sufficient.
+The re-add middleware block (lines 236–239) was deleted. The `app.disable('x-powered-by')` call on line 152 is
+sufficient.
 
 #### Verification
 
@@ -344,8 +354,9 @@ This means a PR introducing a security-relevant code pattern (e.g. unsanitised u
 **merged before CodeQL ever ran on it**. The earliest detection would be the next scheduled run — potentially 24 hours
 later, and only visible to maintainers who inspect the Security tab.
 
-Dependency Review (which does run on PRs) catches vulnerable packages but not code-level issues. CodeQL is the only SAST
-gate.
+Dependency Review (which does run on PRs) catches vulnerable packages but not code-level issues. CodeQL appears to be
+the primary SAST control currently configured; other SAST tools present in the repository were not audited for
+completeness.
 
 #### Fix
 
@@ -545,25 +556,48 @@ Use this checklist to confirm all fixes are effective after the branch is merged
           (expected: warning in logs, server starts)
 ```
 
+### Shift-left: converting manual checks to automated guardrails
+
+The verification commands above are one-shot, manual checks. The DevSecOps gap between "audit" and "enforcement" is
+closing them into CI gates that run on every PR and deployment. Suggested next steps (see P2 backlog):
+
+| Finding               | Manual check (above)  | Automated guardrail                                                                                                                           |
+| --------------------- | --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| P1-1 X-Powered-By     | `curl \| grep`        | CI smoke-test job: `curl -sf ... \| ! grep -i x-powered-by`                                                                                   |
+| P1-2 Unpinned actions | `grep @v*`            | [`zizmor`](https://github.com/woodruffw/zizmor) / [`pinact`](https://github.com/suzuki-shunsuke/pinact) / `actionlint` as a required PR check |
+| P0-1 Helm idempotency | Manual `kubectl diff` | `helm diff upgrade` in CI asserting zero Secret drift                                                                                         |
+| P1-4 Weak SECRET      | Manual `node start`   | Startup test in integration test suite with `SECRET=x NODE_ENV=production`                                                                    |
+
+This layer — policy-as-code and automated regression guards — is what converts a point-in-time audit into a durable
+security posture.
+
 ---
 
 ## 10. Appendix: Full Application Security Assessment
 
 The following is the broader security assessment of the application code, independent of the P0/P1 findings above.
 
-### SQL Injection — LOW RISK ✅
+> **Methodology note:** The findings below reflect the results of static code review (grep-based pattern matching +
+> manual analysis of identified code paths). Absence of a finding means no evidence of the pattern was identified during
+> this review — it does not constitute proof of absence. Runtime testing, fuzzing, and dynamic analysis were out of
+> scope.
 
-All database access goes through Knex.js with parameterised queries. The limited uses of `knex.raw()` pass bound
-parameters exclusively:
+### SQL Injection
+
+No SQL injection paths identified during static review. Method: grepped all `api/src/` TypeScript files for raw string
+concatenation in query positions; reviewed all `knex.raw()` call sites. All database access uses Knex.js parameterised
+queries; the limited `raw()` uses pass bound parameters exclusively:
 
 ```typescript
 // Safe — identifier and value both bound
 .whereRaw('LOWER(??) = ?', ['external_identifier', identifier.toLowerCase()])
 ```
 
-No string concatenation in SQL paths was found across the entire codebase.
+### Authentication
 
-### Authentication — LOW RISK ✅
+No authentication bypass paths identified during static review. Method: traced token issuance and verification through
+`extract-token.ts` → `authenticate.ts` → `get-accountability-for-token.ts`; reviewed all auth driver implementations
+under `api/src/auth/drivers/`. Controls observed:
 
 - JWTs signed with HMAC-SHA256 using the `SECRET` env var
 - Argon2 for password hashing (current state-of-the-art)
@@ -572,54 +606,72 @@ No string concatenation in SQL paths was found across the entire codebase.
 - RFC 6750 compliance — multiple token submission methods in a single request are rejected
 - Session tokens cleared on invalid-credential errors
 
-### Authorisation / Access Control — LOW RISK ✅
+### Authorisation / Access Control
 
-Directus implements a comprehensive row-level access control (RLAC) system:
+No authorisation bypass paths identified during static review. Method: reviewed the full permission enforcement chain in
+`api/src/permissions/modules/`; confirmed enforcement at the service layer (not only controller). Controls observed:
 
 - Policy-based: roles inherit from multiple policies
 - Field-level: per-field read/write/create/delete permissions
 - Row-level: dynamic filter variables (`$CURRENT_USER`, `$NOW`, etc.)
 - Enforced at the service layer, not just the controller layer
 
-### Insecure Deserialization — LOW RISK ✅
+### Insecure Deserialization
 
-No `eval()`, `Function()`, or `unserialize()` of untrusted input. Extension code runs in `isolated-vm` sandboxes with a
-restricted API surface.
+No unsafe deserialization paths identified during static review. Method: grepped for `eval(`, `new Function(`,
+`unserialize(`, `vm.runInNewContext(` across `api/src/`. Extension code runs in `isolated-vm` sandboxes with a
+restricted API surface; the sandbox boundary was reviewed and no escape paths were identified.
 
-### SSRF — LOW RISK ✅
+### SSRF
 
-The MCP OAuth CIMD client ID validator enforces strict URL validation: HTTPS required, no IP addresses, no private TLDs,
-no credentials in URLs, canonical form required, max 255 chars. No user-controlled URL is fetched without validation.
+No unvalidated outbound URL fetch paths identified during static review. Method: grepped for `fetch(`, `axios`, `got(`,
+`http.request(` with user-controlled arguments across `api/src/`; reviewed MCP OAuth client ID validation in
+`api/src/services/mcp-oauth/cimd.ts`. The CIMD validator enforces: HTTPS required, no IP addresses, no private TLDs, no
+credentials in URL, canonical form, max 255 chars.
 
-### XXE — LOW RISK ✅
+### XXE
 
-SAML XML validation uses `@authenio/samlify-node-xmllint` with schema validation. XML export uses `js2xmlparser` with
-safe defaults. No direct XML parsing of user-supplied input.
+No XML External Entity injection paths identified during static review. Method: grepped for XML parsing calls across
+`api/src/`; reviewed SAML handling in `api/src/auth/drivers/saml.ts` and XML export in
+`api/src/services/import-export.ts`. SAML XML validation uses `@authenio/samlify-node-xmllint` with schema validation;
+XML export uses `js2xmlparser` with safe defaults.
 
-### Path Traversal — LOW RISK ✅
+### Path Traversal
 
-File paths use `path.join()` / `path.resolve()` throughout. Upload storage uses abstraction layers (S3, Azure, GCS) that
-prevent direct filesystem path manipulation.
+No path traversal paths identified during static review. Method: grepped for `path.join(`, `path.resolve(`, `readFile(`,
+`createReadStream(` with user-controlled arguments across `api/src/`; reviewed file upload flow in
+`api/src/controllers/files.ts` and `api/src/services/files.ts`. File paths use `path.join()` / `path.resolve()`
+throughout; upload storage uses driver abstractions (S3, Azure, GCS) that prevent direct filesystem path manipulation.
 
-### Cryptography — LOW RISK ✅
+### Cryptography
+
+No weak cryptographic primitive usage in security-sensitive contexts identified during static review. Method: grepped
+for `createHash('md5'`, `createHash('sha1'`, `Math.random(` across `api/src/`; reviewed all findings for
+security-sensitivity. Controls observed:
 
 - HMAC-SHA256 for JWTs and webhook signatures
 - Argon2 for passwords
 - `crypto.randomBytes()` for secrets and tokens
 - `crypto.timingSafeEqual()` for all secret comparisons
-- MD5/SHA-1 usages are limited to non-security contexts (process ID generation, temporary file naming, Oracle index
-  names) — none are security-sensitive
+- MD5/SHA-1 usages found are limited to non-security contexts (process ID generation, temporary file naming, Oracle
+  index names)
 
-### Rate Limiting — LOW RISK ✅
+### Rate Limiting
 
-Three independent rate limiters:
+No missing rate-limiting paths on sensitive endpoints identified during static review. Method: reviewed all
+authentication and registration routes; confirmed rate-limiter middleware application in `api/src/app.ts` and per route.
+Controls observed:
 
 - Global (all requests): `rate-limiter-flexible` with Redis or in-memory backend
 - Per-IP: separate bucket per client IP
 - Registration: dedicated limiter for account creation
 - Login: attempts tracked per user + per IP; account suspended after threshold
 
-### Dependency Management — LOW RISK ✅
+### Dependency Management
+
+No known-vulnerable direct dependencies identified at review time. Method: reviewed `package.json` and
+`pnpm-workspace.yaml` overrides; did not run `pnpm audit` (out of scope for static review — covered by
+`dependency-review-action` in CI). Controls observed:
 
 - `pnpm-lock.yaml` ensures reproducible builds
 - Strategic `overrides` in `pnpm-workspace.yaml` for known-vulnerable transitive dependencies (`qs`, `tar`, `minimatch`,
@@ -627,19 +679,25 @@ Three independent rate limiters:
 - `actions/dependency-review-action` blocks PRs that introduce dependencies with `HIGH` or `CRITICAL` CVEs
 - Trivy scans the published image weekly
 
-### HTTP Security Headers — LOW / MEDIUM RISK ⚠️
+### HTTP Security Headers
 
-| Header                     | Status              | Note                                      |
-| -------------------------- | ------------------- | ----------------------------------------- |
-| Content-Security-Policy    | ✅ Enabled          | `unsafe-eval` required for app extensions |
-| X-Powered-By               | ✅ **Fixed (P1-1)** | Was `Directus`, now suppressed            |
-| HSTS                       | ⚠️ Opt-in only      | See P2-2                                  |
-| Cross-Origin-Opener-Policy | ✅ Configurable     | Enabled via env var                       |
-| X-Frame-Options            | ✅                  | Default Helmet behaviour                  |
-| X-Content-Type-Options     | ✅                  | Default Helmet behaviour                  |
-| Referrer-Policy            | ✅                  | Default Helmet behaviour                  |
+No missing critical security headers identified during static review. Method: reviewed Helmet configuration in
+`api/src/app.ts:182–213`.
 
-### Docker / Container Security — LOW RISK ✅
+| Header                     | Status          | Note                                      |
+| -------------------------- | --------------- | ----------------------------------------- |
+| Content-Security-Policy    | ✅ Configured   | `unsafe-eval` required for app extensions |
+| X-Powered-By               | ✅ Suppressed   | Hardened in P1-1 (upstream default)       |
+| HSTS                       | ⚠️ Opt-in only  | See P2-2                                  |
+| Cross-Origin-Opener-Policy | ✅ Configurable | Enabled via env var                       |
+| X-Frame-Options            | ✅              | Default Helmet behaviour                  |
+| X-Content-Type-Options     | ✅              | Default Helmet behaviour                  |
+| Referrer-Policy            | ✅              | Default Helmet behaviour                  |
+
+### Docker / Container Security
+
+No container security misconfigurations identified during static review. Method: full read of `Dockerfile` and
+`ecosystem.config.cjs`. Controls observed:
 
 - Runs as non-root `node` user (UID 1000)
 - Multi-stage build minimises attack surface in production image
@@ -649,14 +707,17 @@ Three independent rate limiters:
 - Images signed with Cosign via GitHub OIDC (keyless)
 - SBOM and provenance attestations generated at build time
 
-### Kubernetes / Helm — MEDIUM RISK → LOW RISK ✅ (after P0-1 fix)
+### Kubernetes / Helm
+
+No Kubernetes security misconfigurations identified after P0-1 remediation. Method: full read of all templates under
+`helm/directus/templates/`. Controls observed:
 
 - Pod security context: `runAsNonRoot: true`, `allowPrivilegeEscalation: false`, `capabilities.drop: [ALL]`
 - Service type `ClusterIP` by default (not exposed externally without explicit Ingress)
 - Dedicated `ServiceAccount`
 - Init container for DB bootstrap prevents migration race conditions
 - Graceful termination period (60 s) to allow PM2 to drain in-flight requests
-- **Secrets now stable across upgrades** (P0-1 fixed)
+- Secrets stable across upgrades (P0-1 fixed)
 
 ---
 
